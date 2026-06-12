@@ -25,36 +25,15 @@ arithmetic intensity, and scheduling overhead.
 ## The Five Kernels
 
 ### Kernel 0 — CPU Baseline
-A straightforward triple nested loop on the CPU with no parallelism:
-
-```cpp
-for (int i = 0; i < M; i++)
-    for (int j = 0; j < N; j++)
-        for (int k = 0; k < K; k++)
-            C[i][j] += A[i][k] * B[k][j];
-```
-
-This is the benchmark floor. Every subsequent measurement is reported as a
-speedup ratio relative to this baseline.
+A straightforward triple nested loop on the CPU with no parallelism. This is
+the benchmark floor — every subsequent measurement is reported as a speedup
+ratio relative to this baseline.
 
 ---
 
 ### Kernel 1 — GPU Naive
 One CUDA thread per output element. Each thread walks its row of A and its
-column of B independently, loading every value directly from global memory:
-
-```cpp
-__global__ void matmul_naive(float* A, float* B, float* C, int M, int N, int K) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < M && col < N) {
-        float sum = 0.0f;
-        for (int k = 0; k < K; k++)
-            sum += A[row * K + k] * B[k * N + col];
-        C[row * N + col] = sum;
-    }
-}
-```
+column of B independently, loading every value directly from global memory.
 
 **Why it is slow:** global memory on the GPU has high latency (~400–800 cycles)
 and limited bandwidth. Adjacent threads reading the same row of A trigger
@@ -82,31 +61,7 @@ Global memory          Shared memory (on-chip)
 
 Threads in a block collectively load a TILE_SIZE × TILE_SIZE sub-matrix of A
 and B into shared memory, synchronize with `__syncthreads()`, compute partial
-dot products from shared memory, then advance to the next tile:
-
-```cpp
-__global__ void matmul_tiled(float* A, float* B, float* C,
-                              int M, int N, int K) {
-    __shared__ float tileA[TILE_SIZE][TILE_SIZE];
-    __shared__ float tileB[TILE_SIZE][TILE_SIZE];
-
-    int row = blockIdx.y * TILE_SIZE + threadIdx.y;
-    int col = blockIdx.x * TILE_SIZE + threadIdx.x;
-    float sum = 0.0f;
-
-    for (int t = 0; t < K / TILE_SIZE; t++) {
-        tileA[threadIdx.y][threadIdx.x] = A[row * K + t * TILE_SIZE + threadIdx.x];
-        tileB[threadIdx.y][threadIdx.x] = B[(t * TILE_SIZE + threadIdx.y) * N + col];
-        __syncthreads();
-
-        for (int k = 0; k < TILE_SIZE; k++)
-            sum += tileA[threadIdx.y][k] * tileB[k][threadIdx.x];
-        __syncthreads();
-    }
-    if (row < M && col < N)
-        C[row * N + col] = sum;
-}
-```
+dot products from shared memory, then advance to the next tile.
 
 **Why it is fast:** each value loaded from global memory is now reused
 TILE_SIZE times within shared memory instead of once. Global memory traffic
@@ -119,13 +74,7 @@ in global memory accesses — the dominant cost in the naive kernel.
 Global memory loads are most efficient when each thread reads 128 bits (16
 bytes) per transaction rather than 32 bits (4 bytes). CUDA's `float4` type
 loads four floats in a single memory instruction, quadrupling the effective
-memory bandwidth per transaction:
-
-```cpp
-// Instead of: float val = A[idx];
-float4 val = reinterpret_cast<float4*>(A)[idx / 4];
-// val.x, val.y, val.z, val.w hold four consecutive elements
-```
+memory bandwidth per transaction.
 
 The tile loading step in Kernel 2 is modified to use `float4` loads,
 so each thread fetches four elements per global memory instruction instead
@@ -143,25 +92,7 @@ coarsening assigns each thread a 2×2 block of output elements instead. The
 thread loads the same tile data but accumulates four independent partial sums,
 reducing the total number of threads launched and amortizing the overhead of
 thread scheduling, index computation, and shared memory synchronization across
-more useful arithmetic:
-
-```cpp
-// Each thread accumulates a 2x2 block of outputs
-float sum00 = 0, sum01 = 0, sum10 = 0, sum11 = 0;
-
-for (int t = 0; t < K / TILE_SIZE; t++) {
-    // load tile (same as Kernel 2)
-    // ...
-    for (int k = 0; k < TILE_SIZE; k++) {
-        float a0 = tileA[2 * threadIdx.y    ][k];
-        float a1 = tileA[2 * threadIdx.y + 1][k];
-        float b0 = tileB[k][2 * threadIdx.x    ];
-        float b1 = tileB[k][2 * threadIdx.x + 1];
-        sum00 += a0 * b0;   sum01 += a0 * b1;
-        sum10 += a1 * b0;   sum11 += a1 * b1;
-    }
-}
-```
+more useful arithmetic.
 
 **Why it helps:** launching fewer threads means less scheduler overhead and
 more register reuse. The additional arithmetic per thread increases the
