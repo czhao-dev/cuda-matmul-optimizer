@@ -1,8 +1,27 @@
 # CUDA Matrix Multiplication Optimizer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![CUDA](https://img.shields.io/badge/CUDA-12.x%2B-76B900.svg)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)
+
 > A step-by-step optimization of matrix multiplication on the GPU — from a
 > naive CPU baseline to a high-performance tiled CUDA kernel — with measured
 > speedups at each stage and clear explanations of every technique used.
+
+---
+
+## Contents
+
+- [Overview](#overview)
+- [The Five Kernels](#the-five-kernels)
+- [Benchmark Results](#benchmark-results)
+- [Key Concepts Explained](#key-concepts-explained)
+- [Repo Structure](#repo-structure)
+- [Build & Run](#build--run)
+- [Future Work](#future-work)
+- [Further Reading](#further-reading)
+- [License](#license)
 
 ---
 
@@ -108,14 +127,14 @@ Each kernel is measured across three matrix sizes. Timing uses CUDA events
 for precise GPU-side measurement, averaged over 100 runs after 10 warm-up
 iterations.
 
-| Kernel | 256×256 (ms) | 1024×1024 (ms) | 4096×4096 (ms) | Speedup vs CPU (4096) |
-|---|---|---|---|---|
-| 0 — CPU baseline | 2.9845 | 211.568 | 24475.4 | 1× |
-| 1 — GPU naive | 0.0597 | 4.1909 | 305.069 | 80.2× |
-| 2 — Shared memory tiling | 0.0501 | 3.1427 | 234.935 | 104.2× |
-| 3 — Vectorized loads | 0.0667 | 4.1402 | 299.859 | 81.6× |
-| 4 — Thread coarsening | 0.0411 | 2.1095 | 144.259 | 169.7× |
-| cuBLAS reference | 0.0186 | 0.4447 | 31.3451 | 780.8× |
+| Kernel | 256×256 (ms) | 1024×1024 (ms) | 4096×4096 (ms) | GFLOP/s (4096) | Speedup vs CPU (4096) |
+|---|---|---|---|---|---|
+| 0 — CPU baseline | 2.9845 | 211.568 | 24475.4 | 5.6 | 1× |
+| 1 — GPU naive | 0.0597 | 4.1909 | 305.069 | 450.5 | 80.2× |
+| 2 — Shared memory tiling | 0.0501 | 3.1427 | 234.935 | 585.0 | 104.2× |
+| 3 — Vectorized loads | 0.0667 | 4.1402 | 299.859 | 458.3 | 81.6× |
+| 4 — Thread coarsening | 0.0411 | 2.1095 | 144.259 | 952.7 | 169.7× |
+| cuBLAS reference | 0.0186 | 0.4447 | 31.3451 | 4384.7 | 780.8× |
 
 > Results logged to `benchmarks/results.csv`.
 > Hardware: NVIDIA Tesla T4 (sm_75), CUDA 13.0, Driver 580.159.04 (AWS g4dn.xlarge).
@@ -255,3 +274,9 @@ while — for quick iteration on one GPU kernel, use a smaller size first
 - [NVIDIA nsight Compute Documentation](https://docs.nvidia.com/nsight-compute/)
 - [Programming Massively Parallel Processors — Kirk & Hwu](https://www.elsevier.com/books/programming-massively-parallel-processors/kirk/978-0-12-811986-0) —
   Chapter 4 covers tiled matrix multiplication in depth
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
