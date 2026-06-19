@@ -13,4 +13,5 @@ cmake-build-*/
 .cache/
 .vscode/
 .idea/
+rust/target/
 

@@ -1,0 +1,13 @@
+[package]
+name = "cuda-matmul"
+version = "0.1.0"
+edition = "2021"
+description = "Safe Rust wrapper around the CUDA matrix multiplication kernels"
+license = "MIT"
+
+[lib]
+name = "cuda_matmul"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
