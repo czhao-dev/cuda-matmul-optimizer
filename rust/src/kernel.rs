@@ -26,7 +26,7 @@ impl MatMulKernel {
     /// `c` (M×N), using the given kernel `variant`. Synchronizes the device
     /// before returning, so `c.copy_to_host(..)` is safe to call
     /// immediately afterward.
-    #[must_use]
+    #[must_use = "ignoring this discards a potential CUDA launch/sync error"]
     pub fn launch(
         a: &CudaBuffer<f32>,
         b: &CudaBuffer<f32>,

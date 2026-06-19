@@ -22,7 +22,7 @@ pub struct CudaBuffer<T: Copy> {
 
 impl<T: Copy> CudaBuffer<T> {
     /// Allocates device memory for `len` elements of `T`.
-    #[must_use]
+    #[must_use = "discarding this drops the buffer immediately, freeing the GPU allocation"]
     pub fn alloc(len: usize) -> Result<Self, CudaError> {
         let bytes = len
             .checked_mul(std::mem::size_of::<T>())

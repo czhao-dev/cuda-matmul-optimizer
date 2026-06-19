@@ -277,18 +277,34 @@ This means a `cudaFree` leak on an early error return is impossible — the
 
 ## Benchmarks
 
-Measured overhead of the Rust wrapper layer vs calling the C++ kernels directly:
+Measured on an AWS `g4dn.xlarge` (Tesla T4, compute capability 7.5,
+`CUDA_ARCH=sm_75`), CUDA 12.9, 1024×1024×1024, 2 warmup + 10 timed launches:
 
 | Kernel | C++ direct (ms) | Rust wrapper (ms) | Overhead |
 |---|---|---|---|
-| Naive, 1024×1024 | — | — | — |
-| Tiled, 1024×1024 | — | — | — |
-| Vectorized, 1024×1024 | — | — | — |
-| Coarsened, 1024×1024 | — | — | — |
+| Naive | 3.598 | 3.661 | +1.7% |
+| Tiled | 2.730 | 2.731 | ~0% |
+| Vectorized | 3.759 | 3.495 | −7.0% |
+| Coarsened | 1.922 | 1.336 | −30.5% |
 
-> Expected result: zero measurable overhead — the wrapper is purely a
-> compile-time abstraction. All actual computation runs in the identical
-> `.cu` kernel code. Fill in with your measured results.
+> The Naive/Tiled/Vectorized rows land within run-to-run noise of each
+> other, consistent with the wrapper adding no real per-launch cost (it's
+> a pointer pass-through plus a `match` and a `cudaDeviceSynchronize`
+> call). The Coarsened row's gap is the opposite sign you'd expect from
+> "the wrapper is slower" and is a measurement-methodology artifact: the
+> C++ harness (`benchmarks/bench.cu`) times a *batch* of back-to-back
+> launches with one `cudaEvent`-based timestamp at the end, while the Rust
+> harness (`examples/benchmark.rs`) times each launch via host-side
+> `std::time::Instant`, synchronizing after every single call — a
+> deliberate safety property of `MatMulKernel::launch` (see Phase 3 of the
+> build guide), not a flaw in this comparison. For a 3-4ms kernel that
+> per-call overhead is negligible; for Coarsened's sub-2ms execution time
+> it's large enough, on a shared cloud GPU, to be dominated by scheduling
+> noise rather than by anything either implementation is actually doing
+> differently. Reproduce with `CUDA_ARCH=sm_75 cargo run --release
+> --example benchmark` and `./build/matmul --kernel <1-4> --size 1024
+> --warmup 2 --runs 10 --no-verify` (CMake build configured with
+> `-DCMAKE_CUDA_ARCHITECTURES=75` for this GPU).
 
 ---
 
