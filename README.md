@@ -180,6 +180,15 @@ iterations.
 > Hardware: NVIDIA Tesla T4 (sm_75), CUDA 13.0, Driver 580.159.04 (AWS g4dn.xlarge).
 > cuBLAS is included as an upper-bound reference — not a target to beat.
 
+<p align="center">
+  <img src="benchmarks/plots/cuda_gflops_by_size.png" width="48%" alt="CUDA kernel GFLOP/s by matrix size">
+  <img src="benchmarks/plots/cuda_speedup_vs_cpu.png" width="48%" alt="CUDA kernel speedup vs CPU baseline at 4096x4096">
+</p>
+
+> Regenerate with `pip install -r scripts/requirements.txt && python3
+> scripts/plot_benchmarks.py`, which reads `benchmarks/results.csv` and
+> writes PNGs to `benchmarks/plots/`.
+
 For Nsight Compute profiler evidence and a kernel-by-kernel discussion of
 these numbers (including why vectorized loads underperformed tiling at these
 sizes), see [docs/optimization_notes.md](docs/optimization_notes.md).
@@ -218,41 +227,13 @@ to touch a raw pointer.
 ### Public API
 
 No `unsafe` keyword anywhere in application code (`rust/examples/basic.rs`):
-
-```rust
-use cuda_matmul::{CudaBuffer, KernelVariant, MatMulKernel};
-
-fn main() -> Result<(), cuda_matmul::CudaError> {
-    let m = 1024usize;
-    let n = 1024usize;
-    let k = 1024usize;
-
-    // Fill host matrices.
-    let a_host: Vec<f32> = (0..m * k).map(|i| i as f32 * 0.001).collect();
-    let b_host: Vec<f32> = (0..k * n).map(|i| i as f32 * 0.001).collect();
-    let mut c_host = vec![0.0f32; m * n];
-
-    // Allocate GPU buffers — freed automatically when they go out of scope.
-    let mut a = CudaBuffer::<f32>::alloc(m * k)?;
-    let mut b = CudaBuffer::<f32>::alloc(k * n)?;
-    let mut c = CudaBuffer::<f32>::alloc(m * n)?;
-
-    // Copy host -> device.
-    a.copy_from_host(&a_host)?;
-    b.copy_from_host(&b_host)?;
-
-    // Launch kernel — caller chooses the variant, no raw pointers required.
-    MatMulKernel::launch(&a, &b, &mut c, m, n, k, KernelVariant::Tiled)?;
-
-    // Copy device -> host.
-    c.copy_to_host(&mut c_host)?;
-
-    println!("C[0][0] = {:.4}", c_host[0]);
-
-    Ok(())
-    // a, b, c go out of scope here — cudaFree called automatically.
-}
-```
+the example allocates three `CudaBuffer<f32>` buffers with `alloc`, copies
+the host matrices in with `copy_from_host`, launches a kernel variant via
+`MatMulKernel::launch(&a, &b, &mut c, m, n, k, KernelVariant::Tiled)`, and
+copies the result back with `copy_to_host`. There are no raw pointers, no
+manual `cudaFree` calls, and no explicit cleanup — `a`, `b`, and `c` free
+their device memory automatically via `Drop` when they go out of scope at
+the end of `main`.
 
 Contrast this with the equivalent raw C++ call, which requires explicit
 `cudaMalloc`, `cudaMemcpy`, manual kernel launch syntax, and three separate
@@ -260,68 +241,32 @@ Contrast this with the equivalent raw C++ call, which requires explicit
 
 ### Design notes
 
-**`CudaBuffer<T>` — ownership applied to GPU memory.** `T` is bounded by
-`Copy`, not left fully generic: `copy_from_host`/`copy_to_host` move bytes via
-a raw `cudaMemcpy`, and a type with a custom `Drop` impl copied that way would
-have its destructor invariants silently violated. `Copy` and `Drop` are
-mutually exclusive in Rust, so this bound rules out that bug class at the
-type level — `PhantomData<T>` keeps the struct generic over the element type
-without storing one, which is what correct drop-check and variance reasoning
-requires.
-
-```rust
-// rust/src/buffer.rs
-pub struct CudaBuffer<T: Copy> {
-    ptr: *mut T,
-    len: usize,
-    _marker: PhantomData<T>,
-}
-
-impl<T: Copy> Drop for CudaBuffer<T> {
-    fn drop(&mut self) {
-        // Safety: `self.ptr` was allocated by `cudaMalloc` in `alloc` and
-        // is freed exactly once because Rust's ownership model guarantees
-        // `drop` runs at most once per value.
-        unsafe { ffi::cudaFree(self.ptr.cast()); }
-    }
-}
-```
+**`CudaBuffer<T>` — ownership applied to GPU memory.** In `rust/src/buffer.rs`,
+`T` is bounded by `Copy`, not left fully generic: `copy_from_host`/
+`copy_to_host` move bytes via a raw `cudaMemcpy`, and a type with a custom
+`Drop` impl copied that way would have its destructor invariants silently
+violated. `Copy` and `Drop` are mutually exclusive in Rust, so this bound
+rules out that bug class at the type level — `PhantomData<T>` keeps the
+struct generic over the element type without storing one, which is what
+correct drop-check and variance reasoning requires. Its `Drop` impl calls
+`ffi::cudaFree` on the pointer that `alloc` obtained from `cudaMalloc`,
+freeing it exactly once because Rust's ownership model guarantees `drop`
+runs at most once per value.
 
 **The `unsafe`/safe boundary.** Every interaction with the CUDA C API lives
 inside `buffer.rs`/`kernel.rs` (which hide the pointer behind a safe API) or
 `ffi.rs` (which declares the raw `extern "C"` bindings). The rest of the
-crate is entirely safe Rust:
-
-```rust
-// rust/src/ffi.rs — the one place unsafe FFI declarations live
-extern "C" {
-    pub(crate) fn cuda_matmul_launch_naive(
-        a: *const c_float, b: *const c_float, c: *mut c_float,
-        m: c_int, n: c_int, k: c_int,
-    ) -> c_int;
-    // ...tiled, vectorized, coarsened — same shape
-}
-```
-
-```rust
-// rust/src/kernel.rs — safe wrapper around ffi.rs
-pub fn launch(
-    a: &CudaBuffer<f32>, b: &CudaBuffer<f32>, c: &mut CudaBuffer<f32>,
-    m: usize, n: usize, k: usize, variant: KernelVariant,
-) -> Result<(), CudaError> {
-    check_dims(a, b, c, m, n, k)?;          // catch undersized buffers before FFI
-    let code = unsafe {
-        // Safety: a/b/c are valid device allocations, lengths checked
-        // above, c is exclusively borrowed (&mut) so no Rust-level race.
-        match variant {
-            KernelVariant::Naive => ffi::cuda_matmul_launch_naive(a.as_ptr(), b.as_ptr(), c.as_mut_ptr(), m as i32, n as i32, k as i32),
-            // ...tiled, vectorized, coarsened
-        }
-    };
-    check(code, CudaError::LaunchFailed)?;
-    check(unsafe { ffi::cudaDeviceSynchronize() }, CudaError::SyncFailed)
-}
-```
+crate is entirely safe Rust. `rust/src/ffi.rs` is the one place the unsafe
+FFI declarations live — one `extern "C"` function per kernel variant
+(`cuda_matmul_launch_naive`, `_tiled`, `_vectorized`, `_coarsened`), each
+taking raw `*const`/`*mut c_float` pointers and `c_int` dimensions.
+`rust/src/kernel.rs` wraps those declarations in the safe
+`MatMulKernel::launch`: it validates buffer dimensions with `check_dims`
+before touching FFI at all, calls the matching `ffi::cuda_matmul_launch_*`
+inside an `unsafe` block (sound because the buffers are valid device
+allocations, lengths were already checked, and `c: &mut CudaBuffer<f32>`
+being exclusively borrowed rules out a Rust-level data race), then checks
+the returned status code and calls `cudaDeviceSynchronize` before returning.
 
 `KernelVariant` is a plain unit-only enum (`Naive`/`Tiled`/`Vectorized`/
 `Coarsened`) rather than carrying config like `Tiled { tile_size }` — the
@@ -332,45 +277,26 @@ runtime. `cuda_bridge.cu` thin-wraps the existing C++ `launch_naive`/
 `kernels.cuh` rather than reimplementing grid/block setup — the same launch
 math runs either way.
 
-**`build.rs` — compiling CUDA from Cargo.** Cargo runs `build.rs` before
+**`build.rs` — compiling CUDA from Cargo.** Cargo runs `rust/build.rs` before
 compiling the crate, which is how a Rust build can invoke `nvcc` and link the
-result:
-
-```rust
-// rust/build.rs (abbreviated)
-let cuda_arch = env::var("CUDA_ARCH").unwrap_or_else(|_| "sm_86".to_string());
-// compiles ../src/kernel{1,2,3,4}_*.cu + cuda/cuda_bridge.cu in place —
-// no copies — into OUT_DIR, with `-arch=<cuda_arch>` and the same
-// `--use_fast_math` flag the top-level CMake build uses.
-println!("cargo:rustc-link-lib=static=cuda_kernels");
-println!("cargo:rustc-link-lib=dylib=cudart");
-println!("cargo:rerun-if-env-changed=CUDA_ARCH"); // override per-GPU, see Build & Run
-```
+result: it reads the `CUDA_ARCH` environment variable (defaulting to
+`sm_86`), compiles `../src/kernel{1,2,3,4}_*.cu` and `cuda/cuda_bridge.cu` in
+place — no files are copied — into `OUT_DIR` with `-arch=<cuda_arch>` and the
+same `--use_fast_math` flag the top-level CMake build uses, then emits
+`cargo:rustc-link-lib=static=cuda_kernels`, `cargo:rustc-link-lib=dylib=cudart`,
+and `cargo:rerun-if-env-changed=CUDA_ARCH` so Cargo relinks correctly when the
+target GPU architecture changes (see Build & Run below).
 
 **Error handling with `?` propagation.** Every fallible call returns
-`Result<T, CudaError>`, carrying the raw `cudaError_t` code rather than
-re-encoding the full enum (which would need to track every CUDA Toolkit
-version):
-
-```rust
-// rust/src/error.rs
-#[derive(Debug, thiserror::Error)]
-pub enum CudaError {
-    #[error("cudaMalloc failed (cudaError_t={0})")]
-    AllocationFailed(i32),
-    #[error("cudaMemcpy failed (cudaError_t={0})")]
-    MemcpyFailed(i32),
-    #[error("kernel launch failed (cudaError_t={0})")]
-    LaunchFailed(i32),
-    #[error("cudaDeviceSynchronize failed (cudaError_t={0})")]
-    SyncFailed(i32),
-    #[error("buffer length mismatch: expected {expected}, got {actual}")]
-    LengthMismatch { expected: usize, actual: usize },
-}
-```
-
-A `cudaFree` leak on an early error return is impossible — `Drop` runs
-regardless of which `?` caused the function to exit.
+`Result<T, CudaError>`. `rust/src/error.rs` defines `CudaError` as a
+`thiserror`-derived enum carrying the raw `cudaError_t` code rather than
+re-encoding the full CUDA error space (which would need to track every
+Toolkit version): `AllocationFailed` (from `cudaMalloc`), `MemcpyFailed`
+(from `cudaMemcpy`), `LaunchFailed` (kernel launch), `SyncFailed` (from
+`cudaDeviceSynchronize`), and `LengthMismatch { expected, actual }` for
+buffer/argument size checks caught before any FFI call is made. A `cudaFree`
+leak on an early error return is impossible — `Drop` runs regardless of
+which `?` caused the function to exit.
 
 ### Verification & benchmarks
 
@@ -394,6 +320,10 @@ Throughput across matrix sizes (`cargo run --release --example benchmark`),
 | Vectorized | 0.0575 | 584.0 | 3.503 | 613.1 | 3.170 | 630.8 |
 | Coarsened | 0.0292 | 1148.3 | 1.339 | 1603.3 | 1.240 | 1613.0 |
 
+<p align="center">
+  <img src="benchmarks/plots/rust_gflops_by_size.png" width="72%" alt="Rust wrapper GFLOP/s by matrix size">
+</p>
+
 Wrapper overhead vs. calling the C++ kernels directly, same hardware,
 1024×1024×1024:
 
@@ -403,6 +333,10 @@ Wrapper overhead vs. calling the C++ kernels directly, same hardware,
 | Tiled | 2.730 | 2.731 | ~0% |
 | Vectorized | 3.759 | 3.495 | −7.0% |
 | Coarsened | 1.922 | 1.336 | −30.5% |
+
+<p align="center">
+  <img src="benchmarks/plots/rust_wrapper_overhead.png" width="72%" alt="Rust wrapper overhead vs direct C++ calls">
+</p>
 
 > Naive/Tiled/Vectorized land within run-to-run noise of each other,
 > consistent with the wrapper adding no real per-launch cost — it's a

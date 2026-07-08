@@ -1,0 +1,5 @@
+kernel,cpp_ms,rust_ms,overhead_pct
+naive,3.598,3.661,1.7
+tiled,2.730,2.731,0.0
+vectorized,3.759,3.495,-7.0
+coarsened,1.922,1.336,-30.5
