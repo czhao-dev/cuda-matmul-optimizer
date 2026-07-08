@@ -14,11 +14,11 @@
 ## Contents
 
 - [Overview](#overview)
+- [Repo Structure](#repo-structure)
 - [Architecture](#architecture)
 - [The Five CUDA Kernels](#the-five-cuda-kernels)
 - [CUDA Benchmark Results](#cuda-benchmark-results)
 - [Key Concepts Explained](#key-concepts-explained)
-- [Repo Structure](#repo-structure)
 - [Build & Run](#build--run)
 - [Future Work](#future-work)
 - [Further Reading](#further-reading)
@@ -43,6 +43,37 @@ arithmetic intensity, and scheduling overhead.
 The CUDA kernels (`src/`, `include/`) progress naive → shared-memory tiled →
 vectorized → thread-coarsened, each one fixing a specific bottleneck in the
 previous version, benchmarked against a CPU baseline and cuBLAS.
+
+---
+
+## Repo Structure
+
+```
+CUDA-Matrix-Multiplication-Optimizer/
+├── CMakeLists.txt
+├── README.md
+├── include/
+│   ├── kernels.cuh             ← kernel declarations and shared types
+│   └── bench.cuh               ← timing harness declarations
+├── src/
+│   ├── kernel0_cpu.cpp         ← CPU baseline
+│   ├── kernel1_naive.cu        ← GPU naive
+│   ├── kernel2_tiled.cu        ← shared memory tiling
+│   ├── kernel3_vectorized.cu   ← float4 vectorized loads
+│   ├── kernel4_coarsened.cu    ← thread coarsening
+│   ├── kernel5_cublas.cu       ← cuBLAS reference
+│   └── main.cu                 ← CLI: run, verify, benchmark
+├── benchmarks/
+│   ├── bench.cu                ← CUDA event timing harness
+│   └── results.csv             ← benchmark output
+├── tests/
+│   └── correctness_test.cu     ← compare all kernels against CPU ground truth
+├── docs/
+│   ├── setup.md                ← environment and build setup
+│   └── optimization_notes.md   ← per-kernel findings and profiler evidence
+└── scripts/
+    └── check_cuda_env.sh       ← environment sanity check
+```
 
 ---
 
@@ -263,37 +294,6 @@ The fundamental unit of GPU execution — 32 threads that execute in lockstep.
 Thread coarsening reduces the number of active warps, increasing the work
 done per warp and improving the ratio of useful arithmetic to scheduling
 overhead.
-
----
-
-## Repo Structure
-
-```
-CUDA-Matrix-Multiplication-Optimizer/
-├── CMakeLists.txt
-├── README.md
-├── include/
-│   ├── kernels.cuh            ← kernel declarations and shared types
-│   └── bench.cuh               ← timing harness declarations
-├── src/
-│   ├── kernel0_cpu.cpp         ← CPU baseline
-│   ├── kernel1_naive.cu        ← GPU naive
-│   ├── kernel2_tiled.cu        ← shared memory tiling
-│   ├── kernel3_vectorized.cu   ← float4 vectorized loads
-│   ├── kernel4_coarsened.cu    ← thread coarsening
-│   ├── kernel5_cublas.cu       ← cuBLAS reference
-│   └── main.cu                 ← CLI: run, verify, benchmark
-├── benchmarks/
-│   ├── bench.cu                ← CUDA event timing harness
-│   └── results.csv             ← benchmark output
-├── tests/
-│   └── correctness_test.cu     ← compare all kernels against CPU ground truth
-├── docs/
-│   ├── setup.md                ← environment and build setup
-│   └── optimization_notes.md   ← per-kernel findings and profiler evidence
-└── scripts/
-    └── check_cuda_env.sh       ← environment sanity check
-```
 
 ---
 
