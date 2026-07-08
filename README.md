@@ -181,17 +181,17 @@ stable while the denominator (CPU throughput) is shrinking.
 **Kernel 1 → 2 (tiling): the expected win.** Naive global-memory access
 redundantly re-reads the same row of A and column of B from DRAM in every
 thread. Tiling cuts measured global-load traffic by 8.0× at 1024×1024
-(4.29 GB → 534 MB, per Nsight Compute), and that shows up as a 30–33%
-runtime reduction across all three sizes (0.0597→0.0501 ms at 256,
-4.19→3.14 ms at 1024, 305→235 ms at 4096). The gain is *not* the full
-TILE_SIZE=16× reduction in wall-clock time because global loads were only
-part of the naive kernel's cost — but it is the single largest architectural
-change in this project, which is why it's kernel 2 out of 4.
+(4.29 GB → 534 MB, per Nsight Compute), and that shows up as a 16–25%
+runtime reduction across all three sizes (0.0597→0.0501 ms at 256, ~16%;
+4.19→3.14 ms at 1024, ~25%; 305→235 ms at 4096, ~23%). The gain is *not* the
+full TILE_SIZE=16× reduction in wall-clock time because global loads were
+only part of the naive kernel's cost — but it is the single largest
+architectural change in this project, which is why it's kernel 2 out of 4.
 
 **Kernel 2 → 3 (vectorized loads): a measured regression, not a bug.** This
 is the most interesting result in the table. `float4` loads should reduce
 the *instruction count* per tile load 4×, but the benchmark shows Kernel 3
-is 3–33% *slower* than Kernel 2 at every size (0.0501→0.0667 ms at 256,
+is 28–33% *slower* than Kernel 2 at every size (0.0501→0.0667 ms at 256,
 3.14→4.14 ms at 1024, 235→300 ms at 4096) and its DRAM read traffic is
 essentially unchanged (207 MB vs 202 MB at 1024×1024). The reason, confirmed
 in [docs/optimization_notes.md](docs/optimization_notes.md), is that this
@@ -204,9 +204,9 @@ that looks correct in theory but needs a size-specialized fast path to pay
 off in practice; see [Future Work](#future-work).
 
 **Kernel 4 (thread coarsening): the best of the four custom kernels.**
-Giving each thread a 2×2 output tile instead of 1 roughly doubles
-GFLOP/s over tiling at every size (669.7→816.4 at 256, 683.3→1018 at 1024,
-585.0→952.7 at 4096) by amortizing per-thread overhead — index arithmetic,
+Giving each thread a 2×2 output tile instead of 1 raises GFLOP/s over
+tiling at every size (669.7→816.4 at 256, a 1.2× gain; 683.3→1018 at 1024,
+1.5×; 585.0→952.7 at 4096, 1.6×) by amortizing per-thread overhead — index arithmetic,
 shared-memory address computation, `__syncthreads()` — across 4 independent
 accumulators instead of 1. Because it launches a quarter as many threads for
 the same output, it also raises arithmetic intensity per thread, pushing the
